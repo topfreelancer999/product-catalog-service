@@ -1,31 +1,46 @@
 # Product Catalog Service
 
-This is a simplified **Product Catalog Service** implemented as a test task for a Middle Golang Engineer. The service follows **Domain-Driven Design (DDD)**, **Clean Architecture**, **CQRS**, and **Transactional Outbox** patterns.
-
-It provides product management, pricing rules with discount support, and gRPC APIs for commands and queries.
+This repository contains a **Product Catalog Service** implemented in Go, following **Clean Architecture**, **Domain-Driven Design (DDD)**, **CQRS**, and the **Golden Mutation Pattern**.  
+It is designed to closely match production-grade patterns used with **Google Cloud Spanner**, **gRPC**, and **transactional outbox**.
 
 ---
 
-## Table of Contents
+## Tech Stack
 
-1. [Prerequisites](#prerequisites)
-2. [Running Instructions](#running-instructions)
-3. [Project Structure](#project-structure)
-4. [Design Decisions & Trade-offs](#design-decisions--trade-offs)
-5. [Testing](#testing)
+- **Go** 1.21+
+- **gRPC + Protocol Buffers**
+- **Google Cloud Spanner** (Emulator for local dev)
+- **CommitPlan** for transactional mutations
+- **math/big** for precise money calculations
+- **Testify** for testing
+
+---
+
+## Project Structure (High Level)
+
+```
+cmd/server          -> Service entrypoint (main.go)
+internal/app        -> Domain, usecases, queries
+internal/services   -> Dependency injection (options.go)
+internal/transport  -> gRPC handlers
+internal/pkg        -> Shared infra (clock, committer)
+proto/              -> gRPC API definitions
+migrations/         -> Spanner DDL
+tests/e2e           -> End-to-end tests
+```
 
 ---
 
 ## Prerequisites
 
-* Go 1.21+
-* Docker & Docker Compose
-* Make (optional, for `make` commands)
-* Git
+- Docker + Docker Compose
+- Go 1.21+
+- gcloud CLI (for Spanner emulator tooling)
+- make
 
 ---
 
-## Running Instructions
+## Local Development Setup
 
 ### 1. Start Spanner Emulator
 
@@ -33,126 +48,150 @@ It provides product management, pricing rules with discount support, and gRPC AP
 docker-compose up -d
 ```
 
-This will start a local Spanner emulator for development and testing. By default, it runs on `localhost:9010`.
+Set environment variable (required):
 
-### 2. Run Migrations
+```bash
+export SPANNER_EMULATOR_HOST=localhost:9010
+```
+
+---
+
+### 2. Configure gcloud for Emulator (one-time)
+
+```bash
+gcloud config configurations create emulator || true
+gcloud config set auth/disable_credentials true
+gcloud config set project test-project
+gcloud config set api_endpoint_overrides/spanner http://localhost:9020/
+```
+
+---
+
+### 3. Create Spanner Instance & Database
+
+```bash
+gcloud spanner instances create test-instance   --config=emulator-config   --description="Spanner Emulator"   --nodes=1
+```
+
+```bash
+gcloud spanner databases create product_catalog   --instance=test-instance
+```
+
+---
+
+### 4. Run Database Migrations
 
 ```bash
 make migrate
 ```
 
-This will create the required `products` and `outbox_events` tables in the Spanner emulator.
+This applies the schema from:
 
-### 3. Run Tests
-
-```bash
-make test
+```
+migrations/001_initial_schema.sql
 ```
 
-This executes **unit** and **E2E tests**, covering:
+---
 
-* Product creation and update flows
-* Discount application and effective price calculation
-* Activation/deactivation
-* Business rule validations
-* Outbox event generation
+## Running the Service
 
-### 4. Start gRPC Server
+### Start gRPC Server
 
 ```bash
 make run
 ```
 
-The gRPC server exposes the `ProductService` API on `localhost:50051`. You can test it using gRPC clients such as `grpcurl` or Postman.
-
----
-
-## Project Structure
+The server will start on:
 
 ```
-product-catalog-service/
-├── cmd/                # Service entry point
-├── internal/           # Application code
-│   ├── app/            # Domain & usecases
-│   ├── models/         # DB models
-│   ├── transport/      # gRPC handlers & mappers
-│   └── services/       # DI container
-├── proto/              # gRPC service definitions
-├── migrations/         # Spanner DDL scripts
-├── tests/              # E2E tests
-├── docker-compose.yml  # Spanner emulator
-├── go.mod
-└── README.md
+localhost:50051
 ```
 
----
-
-## Design Decisions & Trade-offs
-
-### 1. **Domain Layer Purity**
-
-* All business logic is isolated in `internal/app/product/domain`.
-* Domain layer does not depend on database, gRPC, or external frameworks.
-* Uses `*big.Rat` for money calculations to prevent floating-point inaccuracies.
-
-### 2. **CQRS & Golden Mutation**
-
-* Commands go through domain aggregates with **CommitPlan** transactions.
-* Queries bypass domain when performance matters.
-* This separation ensures business rules are always enforced for writes.
-
-### 3. **Transactional Outbox**
-
-* All domain events are stored in `outbox_events` table.
-* Ensures reliable event publishing without external dependencies.
-
-### 4. **Pricing Rules**
-
-* Discounts are percentage-based and time-bound.
-* Only one active discount per product is allowed.
-* Domain service `PricingCalculator` ensures correct price calculations.
-
-### 5. **Trade-offs**
-
-* Used **Spanner emulator** for local development; production deployment may need additional configurations.
-* Simplified read models and pagination for brevity.
-* Concurrency control is optional; optimistic locking can be added in future iterations.
+Reflection is enabled, so you can use `grpcurl` or Evans.
 
 ---
 
-## Testing
+## Running Tests
 
-* **Unit Tests:** Test domain logic in isolation (money, discount, pricing calculations).
-* **E2E Tests:** Validate flows against real Spanner emulator with commitplan transactions.
-* **Test Commands:**
+### Run All Tests (including E2E)
 
 ```bash
-# Run unit + e2e tests
 make test
 ```
+
+Tests use:
+- Real Spanner emulator
+- Real repositories
+- Real usecases (no mocks)
 
 ---
 
 ## Makefile Commands
 
 ```bash
-# Start Spanner emulator
-make spanner-up
-
-# Run migrations
-make migrate
-
-# Run all tests
-make test
-
-# Start gRPC server
-make run
+make up        # Start Spanner emulator
+make migrate   # Run DB migrations
+make test      # Run all tests
+make run       # Start gRPC server
 ```
 
 ---
 
-## References
+## Design Decisions & Trade-offs
 
-* [CommitPlan Docs](https://github.com/Vektor-AI/commitplan)
-* [Google Cloud Spanner Emulator](https://cloud.google.com/spanner/docs/emulator)
-* [Big Rational Numbers in Go (`math/big`)](https://pkg.go.dev/math/big)
+### Domain Purity
+- Domain layer is **pure Go**
+- No context, no database, no protobuf imports
+- Business rules enforced at aggregate level
+
+**Trade-off:**  
+More boilerplate, but extremely testable and safe.
+
+---
+
+### CQRS
+- Commands go through aggregates + CommitPlan
+- Queries use read models and DTOs directly
+
+**Trade-off:**  
+Slight duplication of models, but much better read performance and clarity.
+
+---
+
+### Golden Mutation Pattern
+- Repositories only **return mutations**
+- Usecases apply CommitPlan
+- Guarantees atomic writes and consistent outbox events
+
+**Trade-off:**  
+More explicit code, but zero hidden side effects.
+
+---
+
+### Transactional Outbox
+- Domain emits intent events
+- Usecases enrich and persist events in same transaction
+- Safe for async processing and event-driven systems
+
+---
+
+### Spanner Emulator
+- Used for local dev and E2E tests
+- Same client and mutations as production
+
+**Trade-off:**  
+Slightly slower than in-memory DB, but production-realistic.
+
+---
+
+## Notes
+
+- This service is intentionally verbose to demonstrate **production-level patterns**
+- Optimistic locking can be added via `updated_at` or version columns if required
+- Outbox poller is intentionally out-of-scope for this task
+
+---
+
+## Author
+
+Built as part of a **Middle Golang Engineer** test assignment.

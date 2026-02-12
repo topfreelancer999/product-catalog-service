@@ -1,9 +1,17 @@
-version: '3.8'
+version: "3.8"
 
 services:
   spanner-emulator:
-    image: gcr.io/cloud-spanner-emulator/emulator
+    image: gcr.io/cloud-spanner-emulator/emulator:latest
+    container_name: spanner-emulator
     ports:
-      - "9010:9010"
-      - "9020:9020"
-
+      - "9010:9010" # gRPC
+      - "9020:9020" # REST (optional, for tooling)
+    command: >
+      /google-cloud-sdk/platform/cloud-spanner-emulator
+      --host_port=0.0.0.0:9010
+    healthcheck:
+      test: ["CMD", "grpc_health_probe", "-addr=:9010"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
